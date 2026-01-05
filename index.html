@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stream Manager (Pantry Cloud)</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;500;700;900&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        /* GIỮ NGUYÊN GIAO DIỆN VJP CŨ */
+        :root { --bg-dark: #0f172a; --card-bg: rgba(30, 41, 59, 0.7); --primary: #3b82f6; --danger: #ef4444; --success: #10b981; --text-main: #f8fafc; --border: rgba(255,255,255,0.1); }
+        * { box-sizing: border-box; }
+        body { font-family: 'Outfit', sans-serif; background: var(--bg-dark); color: var(--text-main); margin: 0; padding: 30px; min-height: 100vh; }
+        header { display: flex; justify-content: space-between; border-bottom: 1px solid var(--border); padding-bottom: 20px; margin-bottom: 30px; }
+        h1 { margin: 0; background: linear-gradient(90deg, #60a5fa, #a78bfa); -webkit-background-clip: text; -webkit-text-fill-color: transparent; text-transform: uppercase; }
+        .controls { background: var(--card-bg); padding: 20px; border-radius: 12px; border: 1px solid var(--border); display: flex; gap: 10px; margin-bottom: 30px; }
+        input { background: rgba(0,0,0,0.3); border: 1px solid var(--border); color: white; padding: 12px; border-radius: 8px; flex: 1; }
+        button { padding: 12px 20px; border-radius: 8px; border: none; font-weight: bold; cursor: pointer; transition: 0.2s; }
+        .btn-add { background: var(--primary); color: white; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(350px, 1fr)); gap: 20px; }
+        
+        .card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 16px; padding: 20px; position: relative; }
+        .card.running { border-color: var(--success); box-shadow: 0 0 15px rgba(16, 185, 129, 0.2); }
+        .card.overtime { border-color: var(--danger); box-shadow: 0 0 15px rgba(239, 68, 68, 0.2); }
+        
+        .timer { font-family: 'JetBrains Mono', monospace; font-size: 3rem; text-align: center; margin: 20px 0; font-weight: 700; }
+        .overtime .timer { color: var(--danger); }
+        
+        .status-badge { position: absolute; top: 20px; right: 20px; font-size: 0.7rem; padding: 4px 8px; background: #333; border-radius: 4px; }
+        .running .status-badge { background: var(--success); color: black; animation: pulse 1s infinite; }
+        .overtime .status-badge { background: var(--danger); color: white; }
+        @keyframes pulse { 0% {opacity:1} 50% {opacity:0.5} 100% {opacity:1} }
+
+        .actions { display: grid; gap: 10px; }
+        .btn-start { background: var(--success); color: #000; width: 100%; }
+        .btn-stop { background: #475569; color: white; width: 100%; }
+        .btn-del { position: absolute; top: 20px; right: 50px; background: transparent; color: #64748b; padding: 0; }
+        .btn-del:hover { color: var(--danger); }
+
+        textarea { width: 100%; background: rgba(0,0,0,0.2); border: none; color: white; padding: 10px; border-radius: 8px; margin-bottom: 10px; resize: vertical; min-height: 60px; }
+        
+        #loader { position: fixed; bottom: 20px; right: 20px; background: #222; padding: 10px 20px; border-radius: 20px; font-size: 0.8rem; display: none; }
+    </style>
+</head>
+<body>
+
+    <div id="loader"><i class="fa-solid fa-spinner fa-spin"></i> Đang đồng bộ...</div>
+
+    <header>
+        <div>
+            <h1>Stream Manager</h1>
+            <span style="font-size: 0.8rem; color: #94a3b8">PANTRY CLOUD EDITION (NO LOGIN)</span>
+        </div>
+        <button onclick="toggleSound()" id="soundBtn" style="background: #333; color: white;">
+            <i class="fa-solid fa-volume-high"></i> Bật/Tắt Tiếng
+        </button>
+    </header>
+
+    <div class="controls">
+        <input id="name" placeholder="Tên buổi Live...">
+        <input id="time" type="number" value="60" placeholder="Phút" style="flex: 0 0 80px; text-align: center;">
+        <button class="btn-add" onclick="addStream()">THÊM MỚI</button>
+    </div>
+
+    <div id="grid" class="grid"></div>
+
+    <script>
+        // ======================================================
+        // CẤU HÌNH PANTRY (THAY LINK CỦA BẠN VÀO ĐÂY)
+        // ======================================================
+        // Vào getpantry.cloud -> Tạo Basket -> Copy link dán vào dưới
+        // ======================================================
+        const API_URL = "https://getpantry.cloud/apiv1/pantry/f1972000-c6f6-4803-ad11-1c485554b7a5/basket/newBasket82";
+        let streams = [];
+        let audioCtx = null;
+        let alarmInterval = null;
+        let soundEnabled = true;
+
+        // --- HỆ THỐNG API (Thay thế Firebase) ---
+        
+        // Hàm lấy dữ liệu
+        async function fetchData() {
+            document.getElementById('loader').style.display = 'block';
+            try {
+                const res = await fetch(API_URL);
+                if (!res.ok) {
+                    // Nếu chưa có dữ liệu (lần đầu), trả về rỗng
+                    streams = []; 
+                } else {
+                    const data = await res.json();
+                    // Pantry trả về object {streams: [...]}, ta lấy cái mảng bên trong
+                    streams = data.streams || []; 
+                }
+                render();
+            } catch (e) {
+                console.error("Lỗi mạng:", e);
+            } finally {
+                document.getElementById('loader').style.display = 'none';
+            }
+        }
+
+        // Hàm Gửi dữ liệu (Ghi đè toàn bộ mảng lên server)
+        async function saveData() {
+            document.getElementById('loader').style.display = 'block';
+            try {
+                await fetch(API_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ streams: streams })
+                });
+            } catch (e) {
+                alert("Lỗi lưu dữ liệu! Kiểm tra mạng.");
+            } finally {
+                document.getElementById('loader').style.display = 'none';
+            }
+        }
+
+        // --- LOGIC APP ---
+
+        async function addStream() {
+            const name = document.getElementById('name').value;
+            const dur = document.getElementById('time').value;
+            if(!name) return;
+
+            // Lấy dữ liệu mới nhất trước khi push để tránh ghi đè dữ liệu người khác
+            await fetchData(); 
+
+            streams.push({
+                id: Date.now(),
+                name: name,
+                duration: parseInt(dur),
+                status: 'idle',
+                startTime: 0,
+                targetTime: 0,
+                note: ''
+            });
+
+            document.getElementById('name').value = '';
+            await saveData(); // Lưu lên mây
+            render();
+        }
+
+        async function updateStatus(id, newStatus) {
+            await fetchData(); // Đồng bộ trước
+            const s = streams.find(x => x.id == id);
+            if (!s) return;
+
+            s.status = newStatus;
+            if (newStatus === 'running') {
+                const now = Date.now();
+                s.startTime = now;
+                s.targetTime = now + (s.duration * 60 * 1000);
+            } else if (newStatus === 'idle') {
+                s.startTime = 0;
+                s.targetTime = 0;
+            }
+            // Overtime thì chỉ đổi status, không đổi time
+
+            await saveData();
+            render();
+            
+            // Kích hoạt âm thanh nếu chạy
+            if (newStatus === 'running') initAudio();
+        }
+
+        async function deleteStream(id) {
+            if(!confirm("Xóa nhé?")) return;
+            await fetchData();
+            streams = streams.filter(x => x.id != id);
+            await saveData();
+            render();
+        }
+
+        // Lưu note (Debounce để không spam API)
+        let timeout = null;
+        function handleNoteChange(id, val) {
+            // Cập nhật local ngay lập tức
+            const s = streams.find(x => x.id == id);
+            if(s) s.note = val;
+
+            // Đợi 1.5 giây sau khi ngừng gõ mới gửi lên server
+            clearTimeout(timeout);
+            timeout = setTimeout(async () => {
+                // Logic phức tạp: Note là thứ dễ bị ghi đè nhất.
+                // Ở đây ta chấp nhận phiên bản đơn giản: Gửi mảng hiện tại lên.
+                saveData(); 
+            }, 1500);
+        }
+
+        // --- RENDER & TIMER ---
+
+        function formatTime(ms) {
+            const s = Math.floor(Math.abs(ms) / 1000);
+            const h = Math.floor(s / 3600).toString().padStart(2,'0');
+            const m = Math.floor((s % 3600) / 60).toString().padStart(2,'0');
+            const sc = (s % 60).toString().padStart(2,'0');
+            return (ms < 0 ? "+" : "") + `${h}:${m}:${sc}`;
+        }
+
+        function render() {
+            const grid = document.getElementById('grid');
+            // Giữ focus nếu đang gõ
+            const activeId = document.activeElement.dataset.id;
+            
+            grid.innerHTML = '';
+            
+            streams.forEach(s => {
+                const div = document.createElement('div');
+                div.className = `card ${s.status}`;
+                
+                let btn = '';
+                let badge = 'OFFLINE';
+
+                if(s.status === 'idle') {
+                    btn = `<button class="btn-start" onclick="updateStatus(${s.id}, 'running')">BẮT ĐẦU</button>`;
+                } else if(s.status === 'running') {
+                    badge = 'ON AIR';
+                    btn = `<button class="btn-stop" onclick="updateStatus(${s.id}, 'idle')">KẾT THÚC</button>`;
+                } else {
+                    badge = 'OVERTIME';
+                    btn = `<button class="btn-stop" style="background:var(--danger)" onclick="updateStatus(${s.id}, 'idle')">TẮT BÁO ĐỘNG</button>`;
+                }
+
+                div.innerHTML = `
+                    <div class="status-badge">${badge}</div>
+                    <button class="btn-del" onclick="deleteStream(${s.id})"><i class="fa-solid fa-trash"></i></button>
+                    <h3>${s.name}</h3>
+                    
+                    <div class="timer" id="t-${s.id}">--:--:--</div>
+                    
+                    <textarea data-id="${s.id}" placeholder="Ghi chú..." oninput="handleNoteChange(${s.id}, this.value)">${s.note}</textarea>
+                    
+                    <div class="actions">${btn}</div>
+                `;
+                grid.appendChild(div);
+            });
+
+            // Restore focus
+            if(activeId) {
+                const el = document.querySelector(`textarea[data-id="${activeId}"]`);
+                if(el) el.focus();
+            }
+            
+            updateClock();
+        }
+
+        function updateClock() {
+            const now = Date.now();
+            let hasOvertime = false;
+
+            streams.forEach(s => {
+                const el = document.getElementById(`t-${s.id}`);
+                if(!el) return;
+
+                if(s.status === 'idle') {
+                    el.innerText = formatTime(s.duration * 60 * 1000);
+                } else {
+                    const diff = s.targetTime - now;
+                    el.innerText = formatTime(diff);
+
+                    if(diff < 0) {
+                        hasOvertime = true;
+                        if(s.status !== 'overtime') {
+                             // Cập nhật UI ngay lập tức
+                             s.status = 'overtime';
+                             render();
+                             // Gửi ngầm lên server
+                             saveData();
+                        }
+                    }
+                }
+            });
+
+            if(hasOvertime && soundEnabled) playBeep();
+        }
+
+        // --- ÂM THANH ---
+        function initAudio() { if(!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+        function toggleSound() { 
+            soundEnabled = !soundEnabled; 
+            document.getElementById('soundBtn').style.opacity = soundEnabled ? 1 : 0.5;
+        }
+        function playBeep() {
+            if(!audioCtx || !soundEnabled) return;
+            // Chỉ kêu mỗi giây 1 lần, hàm này gọi liên tục nên cần check thời gian hoặc dùng interval riêng.
+            // Để đơn giản, ta chỉ kêu "tít" nhẹ.
+            if(Date.now() % 1000 < 100) { 
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.connect(gain); gain.connect(audioCtx.destination);
+                osc.frequency.value = 800;
+                gain.gain.value = 0.1;
+                osc.start(); osc.stop(audioCtx.currentTime + 0.1);
+            }
+        }
+
+        // --- LOOP ---
+        setInterval(updateClock, 100); // Cập nhật đồng hồ siêu mượt
+        setInterval(fetchData, 3000); // Tự động kéo dữ liệu mỗi 3 giây (LONG POLLING)
+        
+        // Chạy lần đầu
+        fetchData();
+
+    </script>
+</body>
+</html>
